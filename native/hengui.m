@@ -29,6 +29,7 @@
 
 static NSWindow *g_win = nil;
 static int g_app_ready = 0;
+static int g_closed = 0;
 static void slot_put(const char *key, const char *val);
 static NSView   *g_root = nil;
 static NSMutableDictionary<NSString *, NSView *> *g_panes = nil;
@@ -167,6 +168,12 @@ const char *界面_启动_t(const char *title) {
                                                                      green:0.11
                                                                       blue:0.15
                                                                      alpha:1.0] CGColor]];
+        /* 关键：默认 releasedWhenClosed=YES 时窗口关闭会自我释放，
+           但 g_win 还指向它，下一次访问就是野指针，
+           实测崩溃信息：-[NSWindow dealloc] Assertion failed
+           （窗口仍被 NSApp._openWindows 引用时被释放）。
+           设为 NO 让生命周期由我们控制。 */
+        [g_win setReleasedWhenClosed:NO];
         [g_win setContentView:g_root];
         [NSApp finishLaunching];
         g_app_ready = 1;
@@ -454,6 +461,11 @@ static void slot_put(const char *key, const char *val) {
 }
 
 /* 自检：报告窗口与分区状态，供衡语写日志证明 GUI 真的建起来了 */
+/* 是否已被用户关闭（衡语据此退出主循环） */
+const char *界面_已关闭_t(const char *ignored) {
+    return g_closed ? "1" : "0";
+}
+
 const char *界面_事件诊断_t(const char *ignored) {
     static char out[512];
     @autoreleasepool {
@@ -993,7 +1005,11 @@ const char *界面_状态栏_t(const char *spec) {
 /* 关闭窗口（衡语主动退出时调用） */
 const char *界面_关闭_t(const char *ignored) {
     @autoreleasepool {
-        if (g_win) [g_win close];
+        if (!g_win) return "1";
+        /* 不调用 close：它会把窗口从 NSApp 摘掉但对象可能已被别处引用。
+           这里只把窗口移出屏幕，随后由进程退出统一回收，最稳。 */
+        [g_win orderOut:nil];
+        g_closed = 1;
     }
     return "1";
 }
