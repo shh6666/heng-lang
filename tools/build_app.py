@@ -118,7 +118,11 @@ def main() -> int:
     # 图形 IDE：脚本 + 原生桥接库，一起放进 Resources
     # 整个 ide 目录的 .hng 都要打进去：ide.hng 会 导入 highlight.hng / files.hng，
     # 只拷主文件会在启动时报「找不到模块」——这是「双击没反应」的真实原因。
-    ide_dir = ROOT.parent / "heng-ide"
+    # IDE 源码在仓库内（heng-ide/），不是父目录——
+    # 早期放在仓库外，导致 .app 里打不到 ide.hng，双击直接报「文件不存在」。
+    ide_dir = ROOT / "heng-ide"
+    if not ide_dir.is_dir():
+        ide_dir = ROOT.parent / "heng-ide"
     gui_lib = ROOT / "native" / "bin" / "libhengui.dylib"
     if ide_dir.is_dir():
         packed = []
