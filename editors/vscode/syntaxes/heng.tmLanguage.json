@@ -1,0 +1,102 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "衡语 Heng",
+  "scopeName": "source.heng",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#blocks" },
+    { "include": "#flow-control" },
+    { "include": "#declaration" },
+    { "include": "#error-handling" },
+    { "include": "#sandbox" },
+    { "include": "#concurrency" },
+    { "include": "#verify" },
+    { "include": "#builtin-types" },
+    { "include": "#literals" },
+    { "include": "#operators" },
+    { "include": "#numbers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [{
+        "name": "comment.line.heng",
+        "match": "注：.*$"
+      }]
+    },
+    "strings": {
+      "patterns": [{
+        "name": "string.quoted.double.heng",
+        "begin": "\"",
+        "end": "\"",
+        "patterns": [{ "name": "constant.character.escape.heng", "match": "\\\\." }]
+      }]
+    },
+    "blocks": {
+      "patterns": [{
+        "name": "keyword.control.block.heng",
+        "match": "\\b(完毕)\\b"
+      }]
+    },
+    "flow-control": {
+      "patterns": [{
+        "name": "keyword.control.conditional.heng",
+        "match": "\\b(倘若|否则|循环|遍历|为|返回|并且|或者|非)\\b"
+      }]
+    },
+    "declaration": {
+      "patterns": [{
+        "name": "keyword.declaration.heng",
+        "match": "\\b(定义|函数|记录|字段|模块|导入|导出|入口|常量|变量|类型|赋于|将)\\b"
+      }]
+    },
+    "error-handling": {
+      "patterns": [{
+        "name": "keyword.control.exception.heng",
+        "match": "\\b(尝试|捕获|终结|抛出|可能生|错误)\\b"
+      }]
+    },
+    "sandbox": {
+      "patterns": [{
+        "name": "keyword.security.heng",
+        "match": "\\b(沙箱|授权|执行|观察)\\b"
+      }]
+    },
+    "concurrency": {
+      "patterns": [{
+        "name": "keyword.control.concurrent.heng",
+        "match": "\\b(并行|启|收)\\b"
+      }]
+    },
+    "verify": {
+      "patterns": [{
+        "name": "keyword.other.contract.heng",
+        "match": "\\b(规约|前置|后置|断言)\\b"
+      }]
+    },
+    "builtin-types": {
+      "patterns": [{
+        "name": "support.type.primitive.heng",
+        "match": "\\b(数|文本|真假|序列|映射)\\b"
+      }]
+    },
+    "literals": {
+      "patterns": [{
+        "name": "constant.language.heng",
+        "match": "\\b(真|假|空)\\b"
+      }]
+    },
+    "operators": {
+      "patterns": [{
+        "name": "keyword.operator.heng",
+        "match": "(\\+|-|\\*|/|=|!=|<=|>=|<|>)"
+      }]
+    },
+    "numbers": {
+      "patterns": [{
+        "name": "constant.numeric.heng",
+        "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+      }]
+    }
+  }
+}

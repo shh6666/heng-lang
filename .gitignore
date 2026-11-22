@@ -1,0 +1,32 @@
+# 构建产物（可用 tools/build_macos.py 重新生成）
+dist/
+build/
+*.hbc
+*.pkg
+native/bin/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+._*
+*.dSYM/
+
+# IDE 运行时临时文件
+.ide_*.log
+.ide_*.txt
+workspace/
+.controls.txt
+.diag.txt
+.probe.txt
+.geom.txt
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

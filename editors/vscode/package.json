@@ -1,0 +1,39 @@
+{
+  "name": "heng-language",
+  "displayName": "衡语 (Heng) 语言支持",
+  "description": "AI 时代中文编程语言「衡语」的语法高亮与 LSP 支持",
+  "version": "1.0.0",
+  "publisher": "heng-lang",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "heng",
+      "aliases": ["衡语", "Heng", "heng"],
+      "extensions": [".hng"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "heng",
+      "scopeName": "source.heng",
+      "path": "./syntaxes/heng.tmLanguage.json"
+    }],
+    "configuration": {
+      "title": "衡语",
+      "properties": {
+        "heng.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "用于启动衡语 LSP 的 Python 解释器路径"
+        },
+        "heng.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用衡语 LSP（诊断、补全、悬停）"
+        }
+      }
+    }
+  },
+  "activationEvents": ["onLanguage:heng"],
+  "main": "./extension.js"
+}
