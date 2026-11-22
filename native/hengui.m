@@ -934,6 +934,104 @@ const char *界面_状态右_t(const char *text) {
     }
 }
 
+/* 文件树可点击：把「分区|条目1:条目2:...」渲染成列表，点击推事件。
+ *
+ * 实现取舍：不用 NSOutlineView（需要实现完整的数据源协议，
+ * 而且衡语侧的数据是每次全量给的），改用 NSTableView + 一个轻量代理对象。
+ * 条目里的 "  " 前缀表示缩进层级，渲染时转成空格宽度。
+ */
+@interface HengTreeSource : NSObject <NSTableViewDataSource, NSTableViewDelegate>
+@property (strong) NSMutableArray<NSString *> *items;
+@property (strong) NSTableView *table;
+@end
+
+@implementation HengTreeSource
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv {
+    return (NSInteger)[self.items count];
+}
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+    NSTextField *tf = [tv makeViewWithIdentifier:@"tcell" owner:self];
+    if (!tf) {
+        tf = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 20)];
+        [tf setIdentifier:@"tcell"];
+        [tf setBezeled:NO];
+        [tf setDrawsBackground:NO];
+        [tf setEditable:NO];
+        [tf setSelectable:NO];
+        [tf setFont:[NSFont systemFontOfSize:12]];
+        [tf setTextColor:[NSColor colorWithCalibratedRed:0.82 green:0.86 blue:0.93 alpha:1]];
+        [tf setLineBreakMode:NSLineBreakByTruncatingTail];
+    }
+    if (row >= 0 && row < (NSInteger)[self.items count]) {
+        [tf setStringValue:self.items[row]];
+    }
+    return tf;
+}
+- (void)tableViewSelectionDidChange:(NSNotification *)note {
+    NSInteger r = [self.table selectedRow];
+    if (r >= 0 && r < (NSInteger)[self.items count]) {
+        push_event("树", [self.items[r] UTF8String]);
+    }
+}
+@end
+
+static HengTreeSource *g_tree_src = nil;
+static NSTableView  *g_tree_tbl = nil;
+
+const char *界面_树可点_t(const char *spec) {
+    @autoreleasepool {
+        static char buf[131072];
+        snprintf(buf, sizeof buf, "%s", spec ? spec : "");
+        char *bar = strchr(buf, '|');
+        if (!bar) return "0";
+        *bar = 0;
+        const char *name = buf;
+        const char *list = bar + 1;
+        HengPane *p = pane_of(name);
+        if (!p) return "0";
+
+        if (!g_tree_src) g_tree_src = [[HengTreeSource alloc] init];
+        if (!g_tree_src.items) g_tree_src.items = [NSMutableArray array];
+        [g_tree_src.items removeAllObjects];
+        const char *q = list;
+        while (*q) {
+            const char *sep = strchr(q, ':');
+            size_t len = sep ? (size_t)(sep - q) : strlen(q);
+            if (len > 0) {
+                NSString *t = [[NSString alloc] initWithBytes:q length:len encoding:NSUTF8StringEncoding];
+                if (t) [g_tree_src.items addObject:t];
+            }
+            if (!sep) break;
+            q = sep + 1;
+        }
+
+        if (!g_tree_tbl || [g_tree_tbl superview] != (NSView *)[[p subviews] lastObject]) {
+            /* 首次或分区换了：重建 */
+            for (NSView *v in [[p subviews] copy]) [v removeFromSuperview];
+            NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:[p bounds]];
+            [scroll setHasVerticalScroller:YES];
+            [scroll setDrawsBackground:NO];
+            [scroll setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            NSTableView *tv = [[NSTableView alloc] initWithFrame:[p bounds]];
+            NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"t"];
+            [col setWidth:[p bounds].size.width - 10];
+            [tv addTableColumn:col];
+            [tv setHeaderView:nil];
+            [tv setRowHeight:22];
+            [tv setBackgroundColor:[NSColor clearColor]];
+            [tv setDataSource:g_tree_src];
+            [tv setDelegate:g_tree_src];
+            g_tree_src.table = tv;
+            [scroll setDocumentView:tv];
+            [p addSubview:scroll];
+            g_tree_tbl = tv;
+        } else {
+            [g_tree_tbl reloadData];
+        }
+        return "1";
+    }
+}
+
 const char *界面_自检_t(const char *ignored) {
     static char out[2048];
     @autoreleasepool {
