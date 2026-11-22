@@ -17,19 +17,6 @@
  *   - 调用栈是连续数组 + 帧指针，不使用递归（避免爆栈，且更快）。
  */
 
-/* 特性宏必须在任何头文件之前定义。
-   Linux 的 glibc 默认只暴露 ISO C 的一部分，
-   readlink / getline 等 POSIX 函数需要 _POSIX_C_SOURCE 或 _DEFAULT_SOURCE，
-   否则报 implicit declaration（而 macOS 默认全开，本地编译根本发现不了）。 */
-#ifdef __linux__
-#  ifndef _DEFAULT_SOURCE
-#    define _DEFAULT_SOURCE 1
-#  endif
-/* 注意：不要同时定义 _POSIX_C_SOURCE。
-   两者并存时 glibc 会按较严格的那个裁剪暴露面，
-   readlink 反而变回隐式声明——这就是上一版加了宏仍报错的原因。 */
-#endif
-
 #include <stdio.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -876,23 +863,39 @@ static void group_wait(int group, int n) {
 #include <dlfcn.h>
 
 /* 取自身可执行文件路径。
-   macOS 用 _NSGetExecutablePath（Apple 专有），Linux 读 /proc/self/exe。
-   早期直接调用 _NSGetExecutablePath，导致 Linux 上链接失败：
-     undefined reference to `_NSGetExecutablePath'
-   而 VM 本身是纯 C、本该跨平台，不该被一个路径查询函数卡住。 */
+ *
+ * 踩过的坑（三次才对）：
+ *   v1 直接调 _NSGetExecutablePath → Linux 链接失败（Apple 专有符号）
+ *   v2 Linux 改用 readlink("/proc/self/exe") → 报 implicit declaration，
+ *      即使加了 _DEFAULT_SOURCE / _POSIX_C_SOURCE 也一样。原因是这份源码
+ *      前面的头文件已经让 glibc 完成了特性判定，后面的宏定义来不及生效。
+ *   v3（当前）不碰 readlink，改用 fopen 读 /proc/self/cmdline。
+ *      cmdline 是纯文件 IO，标准库即可，不需要任何特性宏。
+ */
 static void heng_self_path(char *out, size_t cap) {
-    if (!out || cap == 0) return;
+    if (!out || cap < 2) return;
     out[0] = 0;
 #ifdef __APPLE__
     uint32_t sz = (uint32_t)cap;
     extern int _NSGetExecutablePath(char *, uint32_t *);
     if (_NSGetExecutablePath(out, &sz) != 0) out[0] = 0;
-#elif defined(__linux__)
-    ssize_t n = readlink("/proc/self/exe", out, cap - 1);
-    if (n > 0) out[n] = 0; else out[0] = 0;
 #else
-    /* 其他平台尽力而为：留空，调用方会退回 getenv("HENG_SELF") */
-    out[0] = 0;
+    /* Linux / 其他 Unix：/proc/self/cmdline 的第一段就是可执行文件绝对路径。
+       注意要处理相对路径调用（如 ./hengvm），此时补上 cwd。 */
+    FILE *f = fopen("/proc/self/cmdline", "rb");
+    if (!f) return;
+    size_t n = fread(out, 1, cap - 1, f);
+    fclose(f);
+    if (n == 0) { out[0] = 0; return; }
+    out[n] = 0;                      /* cmdline 用 \0 分隔，第一段自带终止 */
+    if (out[0] != '/') {
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof cwd)) {
+            char joined[PATH_MAX];
+            snprintf(joined, sizeof joined, "%s/%s", cwd, out);
+            snprintf(out, cap, "%s", joined);
+        }
+    }
 #endif
 }
 
