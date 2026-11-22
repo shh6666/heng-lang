@@ -417,8 +417,19 @@ class StdlibNativeTests(unittest.TestCase):
     def test_time_functions(self):
         self.assertEqual(heng('开始:\n  说出 时间.现在() > 0\n结束\n'), ["真"])
         self.assertEqual(heng('开始:\n  说出 时间.毫秒() > 0\n结束\n'), ["真"])
-        self.assertEqual(heng('开始:\n  说出 时间.格式化(0)\n结束\n'),
-                         ["1970-01-01 08:00:00"])
+
+    def test_time_format_is_local_timezone(self):
+        """时间.格式化 按本地时区格式化。
+
+        这里不能硬编码 "1970-01-01 08:00:00"：
+        开发机在东八区，CI 跑在 UTC，断言会挂。
+        改成「用 Python 的同一套规则算期望值」——
+        这样在任何时区下都成立，而且真正验证了「按本地时区」这个语义。
+        """
+        import time as _t
+        expect = _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(0))
+        out = heng('开始:\n  说出 时间.格式化(0)\n结束\n')
+        self.assertEqual(out, [expect])
 
     def test_network_url_encode(self):
         self.assertEqual(heng('开始:\n  说出 网络.编码("a b")\n结束\n'), ["a%20b"])
