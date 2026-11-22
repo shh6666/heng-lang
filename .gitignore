@@ -30,3 +30,14 @@ workspace/
 .vscode/
 .idea/
 *.swp
+
+# 衡语子项目（IDE / OS / 工具）的构建产物
+heng-ide/*.dylib
+heng-os/*.dylib
+heng-os/build/
+heng-tools/*/build/
+**/.ide_*.log
+**/.ide_*.txt
+**/.controls.txt
+**/.diag.txt
+**/workspace/
