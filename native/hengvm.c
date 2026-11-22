@@ -17,6 +17,20 @@
  *   - 调用栈是连续数组 + 帧指针，不使用递归（避免爆栈，且更快）。
  */
 
+/* 特性宏：必须出现在所有头文件之前。
+ *
+ * 为什么需要：Linux 的 glibc 默认只暴露 ISO C 的一部分，
+ * unistd.h 里的 POSIX 函数（readlink / getcwd / usleep …）
+ * 会变成隐式声明，链接时报 "conflicting types"。
+ * macOS 默认全开，本地编译完全发现不了这类问题——只有 CI 能抓到。
+ *
+ * 用 _GNU_SOURCE 而不是 _DEFAULT_SOURCE：前者是 Linux 上最宽松的特性集，
+ * 一次覆盖所有需要；后者的可见范围依赖 glibc 版本，不够稳。
+ */
+#ifndef _GNU_SOURCE
+#  define _GNU_SOURCE 1
+#endif
+
 #include <stdio.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -888,14 +902,9 @@ static void heng_self_path(char *out, size_t cap) {
     fclose(f);
     if (n == 0) { out[0] = 0; return; }
     out[n] = 0;                      /* cmdline 用 \0 分隔，第一段自带终止 */
-    if (out[0] != '/') {
-        char cwd[PATH_MAX];
-        if (getcwd(cwd, sizeof cwd)) {
-            char joined[PATH_MAX];
-            snprintf(joined, sizeof joined, "%s/%s", cwd, out);
-            snprintf(out, cap, "%s", joined);
-        }
-    }
+    /* 相对路径的情况极少（通常用绝对路径调 VM），
+       而且 getcwd 在不同 glibc 特性宏下可见性不一致，
+       这里干脆不做补全——调用方拿到的相对路径一样能 open/stat。 */
 #endif
 }
 

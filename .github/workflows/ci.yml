@@ -37,7 +37,7 @@ jobs:
           cc --version
           # native/bin 是构建产物目录，被 .gitignore 排除，仓库里不存在
           mkdir -p native/bin heng2/bin
-          cc -O3 -pthread -D_DEFAULT_SOURCE \
+          cc -O3 -pthread -D_GNU_SOURCE \
             -o native/bin/hengvm native/hengvm.c -lm
           # 编译器启动时会找 heng2/bin/hengvm，这里同步一份
           cp native/bin/hengvm heng2/bin/hengvm
@@ -119,7 +119,7 @@ jobs:
       - name: 编译虚拟机
         run: |
           mkdir -p native/bin heng2/bin
-          cc -O3 -pthread -D_DEFAULT_SOURCE \
+          cc -O3 -pthread -D_GNU_SOURCE \
             -o native/bin/hengvm native/hengvm.c -lm
           cp native/bin/hengvm heng2/bin/hengvm
 
