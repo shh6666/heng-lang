@@ -17,6 +17,19 @@
  *   - 调用栈是连续数组 + 帧指针，不使用递归（避免爆栈，且更快）。
  */
 
+/* 特性宏必须在任何头文件之前定义。
+   Linux 的 glibc 默认只暴露 ISO C 的一部分，
+   readlink / getline 等 POSIX 函数需要 _POSIX_C_SOURCE 或 _DEFAULT_SOURCE，
+   否则报 implicit declaration（而 macOS 默认全开，本地编译根本发现不了）。 */
+#ifdef __linux__
+#  ifndef _DEFAULT_SOURCE
+#    define _DEFAULT_SOURCE 1
+#  endif
+#  ifndef _POSIX_C_SOURCE
+#    define _POSIX_C_SOURCE 200809L
+#  endif
+#endif
+
 #include <stdio.h>
 #include <limits.h>
 #include <stdlib.h>
