@@ -1,0 +1,136 @@
+name: 验证
+
+# 衡语的持续集成：编译原生 VM，跑单元测试和全部验证项目。
+#
+# 为什么在 Linux 上跑：
+#   编译器（heng2/）是纯 Python，VM（native/hengvm.c）是纯 C，
+#   两者都没有平台依赖。图形部分（native/hengui.m）依赖 AppKit，
+#   只在 macOS 上编译，所以单独放在 macos job 里。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 单元测试与验证项目
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 编译原生虚拟机
+        run: |
+          cc --version
+          cc -O3 -pthread -o native/bin/hengvm native/hengvm.c -lm
+          # 编译器启动时会找 heng2/bin/hengvm，这里同步一份
+          cp native/bin/hengvm heng2/bin/hengvm
+          chmod +x native/bin/hengvm heng2/bin/hengvm
+          echo "--- VM 自检 ---"
+          echo '开始:
+            说出 1 + 1
+          结束' > /tmp/smoke.hng
+          python3 -m heng2 /tmp/smoke.hng
+
+      - name: 内核单元测试
+        run: python3 -m unittest tests.test_heng2 -v
+
+      - name: 旧版兼容测试
+        run: python3 -m unittest tests.test_heng -v
+
+      - name: 全部验证项目（300 个）
+        run: python3 tools/check_all.py
+
+      - name: 教程示例逐个实跑
+        run: |
+          # 教程里的代码如果跑不通，文档就是骗人的。
+          # 04_unit_bad.hng 是「故意写错的量纲反例」，预期失败，跳过。
+          fail=0
+          for f in docs/tutorial/*.hng; do
+            case "$f" in
+              *04_unit_bad*) continue ;;
+            esac
+            if ! python3 -m heng2 "$f" > /dev/null 2>&1; then
+              echo "✗ $f"
+              fail=$((fail + 1))
+            fi
+          done
+          echo "教程示例失败 $fail 个"
+          [ "$fail" -eq 0 ]
+
+  gui:
+    name: 图形桥接（macOS）
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 编译 AppKit 桥接库
+        run: |
+          clang -O2 -fobjc-arc -dynamiclib \
+            -o /tmp/libhengui.dylib \
+            native/hengui.m \
+            -framework Cocoa -framework UniformTypeIdentifiers
+          echo "--- 导出的符号数 ---"
+          nm -gU /tmp/libhengui.dylib | wc -l
+
+      - name: 确认关键接口存在
+        run: |
+          # GUI 相关接口一旦被误删，衡语侧会在运行时才发现。
+          # 这里在编译期就把它们钉住。
+          for sym in 界面_启动_t 界面_加分区_t 界面_按钮_t 界面_等待_t \
+                     界面_选文件_t 界面_已关闭_t 界面_控件清单_t; do
+            if ! nm -gU /tmp/libhengui.dylib | grep -q "_$sym"; then
+              echo "✗ 缺少接口：$sym"
+              exit 1
+            fi
+            echo "✓ $sym"
+          done
+
+  bench:
+    name: 性能基准
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 编译虚拟机
+        run: |
+          cc -O3 -pthread -o native/bin/hengvm native/hengvm.c -lm
+          cp native/bin/hengvm heng2/bin/hengvm
+
+      - name: fib(25) 计时
+        run: |
+          cat > /tmp/fib.hng <<'HL'
+          定义 做法 fib(n : 数) -> 数:
+            如果 n < 2:
+              返回 n
+            结束
+            返回 fib(n - 1) + fib(n - 2)
+          结束
+          开始:
+            说出 fib(25)
+          结束
+          HL
+          for i in 1 2 3; do
+            /usr/bin/time -f "  第 $i 次：%e 秒" python3 -m heng2 /tmp/fib.hng
+          done
