@@ -25,9 +25,9 @@
 #  ifndef _DEFAULT_SOURCE
 #    define _DEFAULT_SOURCE 1
 #  endif
-#  ifndef _POSIX_C_SOURCE
-#    define _POSIX_C_SOURCE 200809L
-#  endif
+/* 注意：不要同时定义 _POSIX_C_SOURCE。
+   两者并存时 glibc 会按较严格的那个裁剪暴露面，
+   readlink 反而变回隐式声明——这就是上一版加了宏仍报错的原因。 */
 #endif
 
 #include <stdio.h>
