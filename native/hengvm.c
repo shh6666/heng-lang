@@ -18,6 +18,7 @@
  */
 
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -860,6 +861,27 @@ static void group_wait(int group, int n) {
    ============================================================ */
 
 #include <dlfcn.h>
+
+/* 取自身可执行文件路径。
+   macOS 用 _NSGetExecutablePath（Apple 专有），Linux 读 /proc/self/exe。
+   早期直接调用 _NSGetExecutablePath，导致 Linux 上链接失败：
+     undefined reference to `_NSGetExecutablePath'
+   而 VM 本身是纯 C、本该跨平台，不该被一个路径查询函数卡住。 */
+static void heng_self_path(char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = 0;
+#ifdef __APPLE__
+    uint32_t sz = (uint32_t)cap;
+    extern int _NSGetExecutablePath(char *, uint32_t *);
+    if (_NSGetExecutablePath(out, &sz) != 0) out[0] = 0;
+#elif defined(__linux__)
+    ssize_t n = readlink("/proc/self/exe", out, cap - 1);
+    if (n > 0) out[n] = 0; else out[0] = 0;
+#else
+    /* 其他平台尽力而为：留空，调用方会退回 getenv("HENG_SELF") */
+    out[0] = 0;
+#endif
+}
 
 typedef double (*ffi_dd)(double, double);
 typedef double (*ffi_d)(double);
@@ -3467,10 +3489,8 @@ static void run_task(Task *task) {
                 if (self && *self) {
                     S[sp++] = v_text(self);
                 } else {
-                    char exe[1024] = "";
-                    uint32_t sz = sizeof exe;
-                    extern int _NSGetExecutablePath(char *, uint32_t *);
-                    if (_NSGetExecutablePath(exe, &sz) != 0) exe[0] = 0;
+                    char exe[PATH_MAX] = "";
+                    heng_self_path(exe, sizeof exe);
                     S[sp++] = v_text(exe);
                 }
                 break;
