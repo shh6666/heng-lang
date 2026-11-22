@@ -30,6 +30,8 @@
 static NSWindow *g_win = nil;
 static int g_app_ready = 0;
 static int g_closed = 0;
+static NSView *g_status_bar = nil;      /* 状态栏容器，复用不重建 */
+static NSTextField *g_status_parts[3] = {nil, nil, nil};
 static void slot_put(const char *key, const char *val);
 static NSView   *g_root = nil;
 static NSMutableDictionary<NSString *, NSView *> *g_panes = nil;
@@ -889,6 +891,49 @@ const char *界面_关命令面板_t(const char *ignored) {
     return "1";
 }
 
+/* 折叠/展开某个分区。
+ *
+ * 为什么需要：专业 IDE 的侧栏、底部面板都可折叠（Cmd+B 切侧栏）。
+ * 实现上不是隐藏视图，而是把宽/高置 0 —— 因为整套布局是百分比计算的，
+ * 隐藏视图会让相邻分区的位置不重算，出现空白或重叠。
+ */
+const char *界面_折叠_t(const char *spec) {
+    @autoreleasepool {
+        char buf[256];
+        snprintf(buf, sizeof buf, "%s", spec ? spec : "");
+        char *comma = strchr(buf, ',');
+        if (!comma) return "0";
+        *comma = 0;
+        const char *name = buf;
+        int fold = atoi(comma + 1);
+
+        HengPane *p = pane_of(name);
+        if (!p) return "0";
+
+        if (fold) {
+            [p setHidden:YES];
+        } else {
+            [p setHidden:NO];
+            NSRect b = [g_root bounds];
+            NSRect f = NSMakeRect(b.size.width * p.px / 100.0,
+                                  b.size.height * (100.0 - p.py - p.ph) / 100.0,
+                                  b.size.width * p.pw / 100.0,
+                                  b.size.height * p.ph / 100.0);
+            [p setFrame:f];
+        }
+        return "1";
+    }
+}
+
+/* 状态栏右侧显示光标位置等动态信息 */
+const char *界面_状态右_t(const char *text) {
+    @autoreleasepool {
+        if (!g_status_parts[2]) return "0";
+        [g_status_parts[2] setStringValue:text ? [NSString stringWithUTF8String:text] : @""];
+        return "1";
+    }
+}
+
 const char *界面_自检_t(const char *ignored) {
     static char out[2048];
     @autoreleasepool {
@@ -1249,20 +1294,38 @@ const char *界面_状态栏_t(const char *spec) {
         if (!g_win) return "0";
         NSRect b = [[g_win contentView] bounds];
         double h = 26;
-        NSView *bar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, b.size.width, h)];
-        [bar setWantsLayer:YES];
-        [[bar layer] setBackgroundColor:[[NSColor colorWithCalibratedRed:0.09
-                                                                  green:0.10
-                                                                   blue:0.14
-                                                                  alpha:1.0] CGColor]];
+
         NSArray *parts = [[NSString stringWithUTF8String:(spec ? spec : "")]
                           componentsSeparatedByString:@"|"];
-        double widths[3] = {b.size.width * 0.30, b.size.width * 0.40, b.size.width * 0.30};
-        double x = 0;
-        for (NSUInteger i = 0; i < [parts count] && i < 3; i++) {
+        double widths[3] = {b.size.width * 0.34, b.size.width * 0.36, b.size.width * 0.30};
+
+        /* 已存在就只更新文字。
+           早期每次调用都新建 bar，再用「高度和 y 相同」去猜哪个是旧状态栏——
+           既会误删别的视图，又会在几次刷新后叠出多层。 */
+        if (g_status_bar) {
+            [g_status_bar setFrame:NSMakeRect(0, 0, b.size.width, h)];
+            for (NSUInteger i = 0; i < [parts count] && i < 3; i++) {
+                if (g_status_parts[i]) {
+                    [g_status_parts[i] setStringValue:parts[i]];
+                    NSRect f = NSMakeRect(i == 0 ? 12 : (i == 1 ? widths[0] : widths[0] + widths[1]),
+                                        4, widths[i] - 12, h - 8);
+                    [g_status_parts[i] setFrame:f];
+                }
+            }
+            return "1";
+        }
+
+        g_status_bar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, b.size.width, h)];
+        [g_status_bar setWantsLayer:YES];
+        [[g_status_bar layer] setBackgroundColor:[[NSColor colorWithCalibratedRed:0.09
+                                                                           green:0.10
+                                                                            blue:0.14
+                                                                           alpha:1.0] CGColor]];
+        for (NSUInteger i = 0; i < 3; i++) {
+            double x = (i == 0) ? 12 : (i == 1 ? widths[0] : widths[0] + widths[1]);
             NSTextField *tf = [[NSTextField alloc] initWithFrame:
-                               NSMakeRect(x + 10, 4, widths[i] - 16, h - 8)];
-            [tf setStringValue:parts[i]];
+                                NSMakeRect(x, 4, widths[i] - 12, h - 8)];
+            [tf setStringValue:(i < [parts count]) ? parts[i] : @""];
             [tf setBezeled:NO];
             [tf setDrawsBackground:NO];
             [tf setEditable:NO];
@@ -1270,19 +1333,11 @@ const char *界面_状态栏_t(const char *spec) {
             [tf setFont:[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]];
             [tf setTextColor:[NSColor colorWithCalibratedRed:0.68 green:0.72 blue:0.82 alpha:1]];
             [tf setAlignment:(i == 1) ? NSTextAlignmentCenter : (i == 2 ? NSTextAlignmentRight : NSTextAlignmentLeft)];
-            [bar addSubview:tf];
-            x += widths[i];
+            [g_status_bar addSubview:tf];
+            g_status_parts[i] = tf;
         }
-        /* 同名的旧状态栏先移除，避免叠加 */
-        for (NSView *v in [[g_root subviews] copy]) {
-            if ([v isKindOfClass:[NSView class]] && v.frame.size.height == h
-                && v.frame.origin.y == 0 && v != bar
-                && [v layer] && [v wantsLayer]) {
-                [v removeFromSuperview];
-            }
-        }
-        [bar setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
-        [g_root addSubview:bar];
+        [g_status_bar setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
+        [g_root addSubview:g_status_bar];
         return "1";
     }
 }
