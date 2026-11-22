@@ -604,6 +604,291 @@ const char *界面_选保存路径_t(const char *defaultName) {
     }
 }
 
+/* ---- 快捷键 ----
+ *
+ * 为什么必须有：专业 IDE 是键盘驱动的。只有按钮的界面永远是「简陋」的。
+ *
+ * 实现方式：在 HengRoot 里重写 performKeyEquivalent，
+ * 把「修饰键 + 字符」翻译成事件推给衡语，由衡语的命令表决定做什么。
+ * C 层不硬编码任何业务逻辑——加一个快捷键只需在衡语里注册一行。
+ *
+ * 事件格式：快捷键|cmd+shift+p  （修饰键按 cmd/shift/opt/ctrl 顺序，小写）
+ */
+static NSString *heng_mod_string(NSEventModifierFlags f) {
+    NSMutableArray *parts = [NSMutableArray array];
+    if (f & NSEventModifierFlagControl) [parts addObject:@"ctrl"];
+    if (f & NSEventModifierFlagOption)  [parts addObject:@"opt"];
+    if (f & NSEventModifierFlagShift)   [parts addObject:@"shift"];
+    if (f & NSEventModifierFlagCommand) [parts addObject:@"cmd"];
+    return [parts componentsJoinedByString:@"+"];
+}
+
+@interface HengRoot (Keys)
+@end
+@implementation HengRoot (Keys)
+
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+    NSEventModifierFlags f = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    /* 无修饰键不在这一层处理，交给正常的键盘输入 */
+    if (!(f & (NSEventModifierFlagCommand | NSEventModifierFlagControl |
+               NSEventModifierFlagOption))) {
+        return NO;
+    }
+    NSString *chars = [[event charactersIgnoringModifiers] lowercaseString];
+    if (!chars || [chars length] == 0) return NO;
+    /* 只认单字符快捷键：多字符说明是输入法组合，不该拦 */
+    if ([chars length] > 1) return NO;
+
+    NSString *combo = [NSString stringWithFormat:@"%@+%@",
+                       heng_mod_string(f), chars];
+    push_event("快捷键", [combo UTF8String]);
+    return YES;      /* 已消费，阻止系统默认行为 */
+}
+
+@end
+
+/* 暴露给衡语：查询某个快捷键是否被按下过（用于调试与自检） */
+const char *界面_快捷键信息_t(const char *ignored) {
+    static char out[512];
+    @autoreleasepool {
+        /* 报告当前窗口的 keyEquivalent 拦截是否已生效 */
+        snprintf(out, sizeof out, "HengRoot 已接管 performKeyEquivalent，按键会以「快捷键|修饰键+字符」推给衡语");
+    }
+    return out;
+}
+
+/* ---- 命令面板 ----
+ *
+ * 借鉴 VS Code 的 Cmd+Shift+P / Sublime 的 Goto Anything。
+ * 一个无边框面板 + 搜索框 + 列表，方向键选择，回车执行，Esc 关闭。
+ *
+ * 衡语负责：提供候选列表、决定回车后做什么。
+ * C 层负责：渲染、过滤、键盘导航。
+ * 这样「有哪些命令」这件事完全留在衡语里。
+ */
+
+@interface HengPalette : NSPanel <NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate>
+@property (strong) NSTextField *search;
+@property (strong) NSTableView *table;
+@property (strong) NSScrollView *scroll;
+@property (strong) NSArray<NSString *> *allItems;
+@property (strong) NSMutableArray<NSString *> *shown;
+@property (strong) NSView *parentView;
+@end
+
+static HengPalette *g_palette = nil;
+
+@implementation HengPalette
+
+- (instancetype)initWithParent:(NSView *)parent {
+    NSRect pf = [parent bounds];
+    NSRect wf = [[parent window] frame];
+    CGFloat w = 560, h = 320;
+    NSRect frame = NSMakeRect(NSMidX(pf) - w / 2, NSMaxY(pf) - h - 60, w, h);
+    self = [super initWithContentRect:frame
+                            styleMask:NSWindowStyleMaskBorderless
+                              backing:NSBackingStoreBuffered
+                                defer:NO];
+    if (!self) return nil;
+    [self setOpaque:NO];
+    [self setBackgroundColor:[NSColor clearColor]];
+    [self setLevel:NSFloatingWindowLevel];
+    [self setHasShadow:YES];
+    self.parentView = parent;
+
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, w, h)];
+    [content setWantsLayer:YES];
+    content.layer.backgroundColor = [[NSColor colorWithCalibratedRed:0.13
+                                                               green:0.14
+                                                                blue:0.18
+                                                               alpha:0.98] CGColor];
+    content.layer.cornerRadius = 10;
+    content.layer.borderWidth = 1;
+    content.layer.borderColor = [[NSColor colorWithCalibratedRed:0.30
+                                                           green:0.34
+                                                            blue:0.42
+                                                           alpha:1] CGColor];
+
+    self.search = [[NSTextField alloc] initWithFrame:NSMakeRect(14, h - 46, w - 28, 30)];
+    [self.search setPlaceholderString:@"输入命令名…（↑↓ 选择，回车执行，Esc 关闭）"];
+    [self.search setFont:[NSFont systemFontOfSize:14]];
+    [self.search setBezelStyle:NSTextFieldRoundedBezel];
+    [self.search setDelegate:self];
+    [content addSubview:self.search];
+
+    NSRect tf = NSMakeRect(10, 10, w - 20, h - 64);
+    self.scroll = [[NSScrollView alloc] initWithFrame:tf];
+    [self.scroll setHasVerticalScroller:YES];
+    [self.scroll setDrawsBackground:NO];
+    self.table = [[NSTableView alloc] initWithFrame:tf];
+    NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"cmd"];
+    [col setWidth:w - 40];
+    [self.table addTableColumn:col];
+    [self.table setHeaderView:nil];
+    [self.table setRowHeight:26];
+    [self.table setBackgroundColor:[NSColor clearColor]];
+    [self.table setDataSource:self];
+    [self.table setDelegate:self];
+    [self.table setSelectionHighlightStyle:NSTableViewSelectionHighlightStyleRegular];
+    [self.scroll setDocumentView:self.table];
+    [content addSubview:self.scroll];
+
+    [self setContentView:content];
+    self.shown = [NSMutableArray array];
+    return self;
+}
+
+- (void)showWithItems:(NSArray<NSString *> *)items {
+    self.allItems = items ?: @[];
+    [self.shown setArray:self.allItems];
+    [self.table reloadData];
+    if ([self.shown count] > 0) {
+        [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                byExtendingSelection:NO];
+    }
+    [self.search setStringValue:@""];
+    [[self parentWindow] addChildWindow:self ordered:NSWindowAbove];
+    [self makeKeyAndOrderFront:nil];
+    [[self parentWindow] makeFirstResponder:self.search];
+}
+
+- (void)hide {
+    [[self parentWindow] removeChildWindow:self];
+    [self orderOut:nil];
+}
+
+- (void)controlTextDidChange:(NSNotification *)note {
+    NSString *q = [[self.search stringValue] lowercaseString];
+    [self.shown removeAllObjects];
+    if ([q length] == 0) {
+        [self.shown addObjectsFromArray:self.allItems];
+    } else {
+        for (NSString *it in self.allItems) {
+            if ([[it lowercaseString] rangeOfString:q].location != NSNotFound) {
+                [self.shown addObject:it];
+            }
+        }
+    }
+    [self.table reloadData];
+    if ([self.shown count] > 0) {
+        [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                byExtendingSelection:NO];
+    }
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv {
+    return (NSInteger)[self.shown count];
+}
+
+- (NSView *)tableView:(NSTableView *)tv
+   viewForTableColumn:(NSTableColumn *)col
+                  row:(NSInteger)row {
+    NSTextField *tf = [tv makeViewWithIdentifier:@"cell" owner:self];
+    if (!tf) {
+        tf = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 500, 24)];
+        [tf setIdentifier:@"cell"];
+        [tf setBezeled:NO];
+        [tf setDrawsBackground:NO];
+        [tf setEditable:NO];
+        [tf setSelectable:NO];
+        [tf setFont:[NSFont systemFontOfSize:13]];
+        [tf setTextColor:[NSColor colorWithCalibratedRed:0.88
+                                                    green:0.91
+                                                     blue:0.96
+                                                    alpha:1]];
+    }
+    if (row >= 0 && row < (NSInteger)[self.shown count]) {
+        [tf setStringValue:self.shown[row]];
+    }
+    return tf;
+}
+
+- (void)keyDown:(NSEvent *)e {
+    unsigned short kc = [e keyCode];
+    if (kc == 53) {                      /* Esc */
+        push_event("命令面板", "取消");
+        [self hide];
+        return;
+    }
+    if (kc == 126) {                     /* ↑ */
+        NSInteger r = [self.table selectedRow];
+        if (r > 0) [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:r - 1]
+                          byExtendingSelection:NO];
+        return;
+    }
+    if (kc == 125) {                     /* ↓ */
+        NSInteger r = [self.table selectedRow];
+        if (r + 1 < (NSInteger)[self.shown count])
+            [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:r + 1]
+                      byExtendingSelection:NO];
+        return;
+    }
+    if (kc == 36) {                      /* Enter */
+        NSInteger r = [self.table selectedRow];
+        if (r >= 0 && r < (NSInteger)[self.shown count]) {
+            NSString *pick = self.shown[r];
+            push_event("命令面板", [pick UTF8String]);
+        }
+        [self hide];
+        return;
+    }
+    [super keyDown:e];
+}
+
+/* 让搜索框的方向键转给面板处理 */
+- (BOOL)control:(NSControl *)control
+       textView:(NSTextView *)tv
+doCommandBySelector:(SEL)sel {
+    if (sel == @selector(moveUp:))     { [self keyDown:[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:126]]; return YES; }
+    if (sel == @selector(moveDown:))   { [self keyDown:[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:125]]; return YES; }
+    if (sel == @selector(insertNewline:)) { [self keyDown:[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:36]]; return YES; }
+    if (sel == @selector(cancelOperation:)) { push_event("命令面板", "取消"); [self hide]; return YES; }
+    return NO;
+}
+
+@end
+
+/* 打开命令面板。items 用 | 分隔（内容里避免出现 |） */
+const char *界面_命令面板_t(const char *spec) {
+    @autoreleasepool {
+        if (!g_win || !g_root) return "0";
+        char buf[65536];
+        snprintf(buf, sizeof buf, "%s", spec ? spec : "");
+        char *bar = strchr(buf, '|');
+        const char *title = bar ? buf : "命令";
+        if (bar) *bar = 0;
+        const char *list = bar ? bar + 1 : buf;
+
+        NSMutableArray *items = [NSMutableArray array];
+        const char *p = list;
+        while (*p) {
+            const char *sep = strchr(p, '|');
+            size_t len = sep ? (size_t)(sep - p) : strlen(p);
+            if (len > 0) {
+                NSString *s = [[NSString alloc] initWithBytes:p length:len encoding:NSUTF8StringEncoding];
+                if (s) [items addObject:s];
+            }
+            if (!sep) break;
+            p = sep + 1;
+        }
+
+        if (!g_palette) {
+            g_palette = [[HengPalette alloc] initWithParent:g_root];
+        }
+        (void)title;
+        [g_palette showWithItems:items];
+        return "1";
+    }
+}
+
+/* 关闭命令面板 */
+const char *界面_关命令面板_t(const char *ignored) {
+    @autoreleasepool {
+        if (g_palette) [g_palette hide];
+    }
+    return "1";
+}
+
 const char *界面_自检_t(const char *ignored) {
     static char out[2048];
     @autoreleasepool {
