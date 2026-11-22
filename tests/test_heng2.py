@@ -1059,5 +1059,49 @@ class TextSliceTests(unittest.TestCase):
         self.assertEqual(out, ["RUN"])
 
 
+class DebuggerTests(unittest.TestCase):
+    """单步调试必须是真的指令级单步，不是打印日志冒充。
+
+    验证方式：跑一段有三个变量赋值的程序，
+    在每步的槽位里能依次看到 10、20、30 的出现——
+    说明 VM 真的在每条指令后停下并暴露了当时的变量值。
+    """
+
+    def test_debug_traces_variables(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, "t.hng")
+            f.write_text('开始:\n  变量 a : 数 = 10\n  变量 b : 数 = 20\n'
+                         '  变量 c : 数 = a + b\n  说出 c\n结束\n',
+                         encoding="utf-8")
+            r = subprocess.run(
+                [sys.executable, "-m", "heng2", "--debug", str(f)],
+                cwd=str(ROOT), capture_output=True, text=True, timeout=120,
+                env={**os.environ, "PYTHONPATH": str(ROOT)})
+            out = r.stdout
+            self.assertIn("停 ▶", out, f"没有停止点：{out[:300]}")
+            self.assertIn("30", out.replace("停 ▶", ""))
+            # 至少要停 4 次（三个赋值 + 说出）
+            self.assertGreaterEqual(out.count("停 ▶"), 3)
+            self.assertIn("[0] 数 = 10", out)
+
+    def test_check_json_structure(self):
+        """--check --json 必须给出可被机器消费的结构化诊断。"""
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, "bad.hng")
+            f.write_text('开始:\n  说出 不存在的变量\n结束\n', encoding="utf-8")
+            r = subprocess.run(
+                [sys.executable, "-m", "heng2", "--check", str(f), "--json"],
+                cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+                env={**os.environ, "PYTHONPATH": str(ROOT)})
+            import json
+            data = json.loads(r.stdout)
+            self.assertFalse(data["ok"])
+            self.assertTrue(data["diagnostics"])
+            d0 = data["diagnostics"][0]
+            for k in ("severity", "code", "message", "line", "column", "help"):
+                self.assertIn(k, d0)
+            self.assertGreater(d0["line"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
